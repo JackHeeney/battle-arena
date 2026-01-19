@@ -272,6 +272,15 @@ export class SheepSpell extends Spell {
             effect: (caster) => {
                 if (window.currentTarget) {
                     console.log('Sheep cast: target transformed into a sheep for 8 seconds.');
+
+                    // Store original HP and add sheep status
+                    const originalHP = window.currentTarget.userData.hp || 100;
+                    window.currentTarget.userData.originalHP = originalHP;
+                    window.currentTarget.userData.isSheeped = true;
+                    window.currentTarget.userData.sheepStartTime = Date.now();
+                    window.currentTarget.userData.sheepDuration = 8000;
+
+                    // Visual transformation
                     window.currentTarget.scale.set(0.5, 0.5, 0.5);
                     window.currentTarget.material.color.set(0xffffff);
                     window.currentTarget.userData.sheepVelocity = new THREE.Vector3(
@@ -279,10 +288,42 @@ export class SheepSpell extends Spell {
                         0,
                         (Math.random() - 0.5) * 0.05
                     );
+
+                    // Healing interval (5% per second)
+                    const healingPercentage = 0.05; // 5% per second
+                    const maxHP = window.currentTarget.userData.maxHp || 100;
+                    const healingInterval = setInterval(() => {
+                        // Check if still sheeped
+                        if (!window.currentTarget || !window.currentTarget.userData.isSheeped) {
+                            clearInterval(healingInterval);
+                            return;
+                        }
+
+                        // Heal 5% of max health
+                        const healAmount = maxHP * healingPercentage;
+                        window.currentTarget.userData.hp = Math.min(
+                            maxHP,
+                            window.currentTarget.userData.hp + healAmount
+                        );
+
+                        console.log(`Sheep healing: +${healAmount.toFixed(1)} HP`);
+                        // Use the global showPopup function if available
+                        if (window.showPopup) {
+                            window.showPopup(`Sheep healing: +${healAmount.toFixed(1)} HP`);
+                        }
+
+                        // Check if sheep duration has ended
+                        const currentTime = Date.now();
+                        if (currentTime > window.currentTarget.userData.sheepStartTime + window.currentTarget.userData.sheepDuration) {
+                            clearInterval(healingInterval);
+                        }
+                    }, 1000); // Heal every second
+
+                    // Remove sheep after duration
                     setTimeout(() => {
-                        window.currentTarget.scale.set(1, 1, 1);
-                        window.currentTarget.material.color.set(0xff0000);
-                        window.currentTarget.userData.sheepVelocity = null;
+                        if (window.currentTarget && window.currentTarget.userData.isSheeped) {
+                            clearSheepEffect(window.currentTarget);
+                        }
                     }, 8000);
                 } else {
                     console.log('Sheep cast: no target selected.');
@@ -291,6 +332,24 @@ export class SheepSpell extends Spell {
         });
     }
 }
+
+// Helper function to clear sheep effect
+function clearSheepEffect(target) {
+    target.scale.set(1, 1, 1);
+    target.material.color.set(0xff0000);
+    target.userData.sheepVelocity = null;
+    target.userData.isSheeped = false;
+    console.log('Sheep effect removed.');
+}
+
+// Add a function to the global scope to be called when damage is applied
+window.checkAndBreakSheepEffect = function (target, damageAmount) {
+    if (target && target.userData.isSheeped) {
+        console.log(`Sheep broken by ${damageAmount} damage!`);
+        showPopup("Sheep broken by damage!");
+        clearSheepEffect(target);
+    }
+};
 
 // Character & Mage classes
 export class Character {
@@ -314,6 +373,29 @@ export class Character {
             return false;
         }
     }
+
+    requiresTarget(spellName) {
+        // These spells require a target
+        const targetSpells = [
+            'Fireball', 'Frost Bolt', 'Sheep',
+            'Dual Attack', 'Slow Shot', 'Poison Shot',
+            'Charge', 'Hamstring', 'Heroic Strike'
+        ];
+
+        // These spells do NOT require a target
+        const nonTargetSpells = [
+            'Frost Nova', 'Innovation', 'Feint Death',
+            'Berserk', 'Thunderclap', 'Ice Trap',
+        ];
+
+        // If it's in nonTargetSpells, explicitly return false
+        if (nonTargetSpells.includes(spellName)) {
+            return false;
+        }
+
+        // Otherwise, check if it's in targetSpells
+        return targetSpells.includes(spellName);
+    }
 }
 
 export class Mage extends Character {
@@ -327,15 +409,333 @@ export class Mage extends Character {
     }
 }
 
-// Warrior and Hunter classes remain unchanged for now.
-export class Warrior extends Character {
-    constructor(mesh = null) {
-        super('Warrior', mesh);
+// ---- Hunter Spells ----
+
+// Dual Attack: Uses bow for long range or axe for close combat
+export class DualAttackSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Dual Attack',
+            range: 18,
+            cooldown: 3000,
+            castTime: 0,
+            channel: false,
+            manaCost: 20,
+            effect: (caster) => {
+                if (!caster.mesh) return;
+                const distance = caster.mesh.position.distanceTo(window.currentTarget.position);
+                if (distance > 5) {
+                    // Long range bow attack
+                    const geometry = new THREE.SphereGeometry(0.2, 8, 8);
+                    const material = new THREE.MeshStandardMaterial({ color: 0xffff00 });
+                    const projectile = new THREE.Mesh(geometry, material);
+                    projectile.position.copy(caster.mesh.position);
+                    projectile.userData = {
+                        target: window.currentTarget,
+                        damage: 15,
+                        velocity: new THREE.Vector3(),
+                        type: 'bowshot'
+                    };
+                    spells.push(projectile);
+                    window.scene.add(projectile);
+                } else {
+                    // Close combat axe attack
+                    const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.1);
+                    const material = new THREE.MeshBasicMaterial({ color: 0x808080 });
+                    const axe = new THREE.Mesh(geometry, material);
+                    axe.position.copy(caster.mesh.position);
+                    window.scene.add(axe);
+                    setTimeout(() => window.scene.remove(axe), 1000);
+                }
+            }
+        });
     }
 }
+
+// Slow Shot: Slows target and deals damage
+export class SlowShotSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Slow Shot',
+            range: 18,
+            cooldown: 5000,
+            castTime: 0,
+            channel: false,
+            manaCost: 25,
+            effect: (caster) => {
+                if (!caster.mesh) return;
+                const geometry = new THREE.SphereGeometry(0.2, 8, 8);
+                const material = new THREE.MeshStandardMaterial({ color: 0x00ffff });
+                const projectile = new THREE.Mesh(geometry, material);
+                projectile.position.copy(caster.mesh.position);
+                projectile.userData = {
+                    target: window.currentTarget,
+                    damage: 10,
+                    velocity: new THREE.Vector3(),
+                    type: 'slowshot',
+                    slowAmount: 0.5,
+                    slowDuration: 5000
+                };
+                spells.push(projectile);
+                window.scene.add(projectile);
+            }
+        });
+    }
+}
+
+// Poison Shot: Applies damage-over-time
+export class PoisonShotSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Poison Shot',
+            range: 18,
+            cooldown: 8000,
+            castTime: 0,
+            channel: false,
+            manaCost: 30,
+            effect: (caster) => {
+                if (!caster.mesh) return;
+                const geometry = new THREE.SphereGeometry(0.2, 8, 8);
+                const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+                const projectile = new THREE.Mesh(geometry, material);
+                projectile.position.copy(caster.mesh.position);
+                projectile.userData = {
+                    target: window.currentTarget,
+                    damage: 5,
+                    velocity: new THREE.Vector3(),
+                    type: 'poisonshot',
+                    dot: 3,
+                    dotDuration: 8000
+                };
+                spells.push(projectile);
+                window.scene.add(projectile);
+            }
+        });
+    }
+}
+
+// Feint Death: Makes hunter untargetable
+export class FeintDeathSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Feint Death',
+            range: 0,
+            cooldown: 15000,
+            castTime: 0,
+            channel: false,
+            manaCost: 40,
+            effect: (caster) => {
+                if (!caster.mesh) return;
+                caster.mesh.material.transparent = true;
+                caster.mesh.material.opacity = 0.3;
+                const originalPosition = caster.mesh.position.clone();
+                const checkMovement = setInterval(() => {
+                    if (caster.mesh.position.distanceTo(originalPosition) > 0.1) {
+                        caster.mesh.material.transparent = false;
+                        caster.mesh.material.opacity = 1;
+                        clearInterval(checkMovement);
+                    }
+                }, 100);
+            }
+        });
+    }
+}
+
+// Ice Trap: Freezes target when triggered
+export class IceTrapSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Ice Trap',
+            range: 18,
+            cooldown: 10000,
+            castTime: 1000,
+            channel: false,
+            manaCost: 35,
+            effect: (caster) => {
+                if (!caster.mesh || !window.currentTarget) return;
+                const geometry = new THREE.CylinderGeometry(0.5, 0.5, 0.1);
+                const material = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+                const trap = new THREE.Mesh(geometry, material);
+                trap.position.copy(window.currentTarget.position);
+                trap.userData.type = 'icetrap';
+                spells.push(trap);
+                window.scene.add(trap);
+                setTimeout(() => {
+                    window.scene.remove(trap);
+                    spells.splice(spells.indexOf(trap), 1);
+                }, 8000);
+            }
+        });
+    }
+}
+
+// ---- Warrior Spells ----
+
+// Charge: Stuns target after charging
+export class ChargeSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Charge',
+            range: 18,
+            cooldown: 8000,
+            castTime: 0,
+            channel: false,
+            manaCost: 20,
+            effect: (caster) => {
+                if (!caster.mesh || !window.currentTarget) return;
+                const direction = new THREE.Vector3()
+                    .subVectors(window.currentTarget.position, caster.mesh.position)
+                    .normalize();
+                caster.mesh.position.add(direction.multiplyScalar(5));
+                window.currentTarget.userData.stunnedUntil = Date.now() + 2000;
+                window.currentTarget.material.color.set(0xffff00);
+                setTimeout(() => {
+                    window.currentTarget.material.color.set(0xff0000);
+                    window.currentTarget.userData.stunnedUntil = null;
+                }, 2000);
+            }
+        });
+    }
+}
+
+// Thunderclap: AOE damage and slow
+export class ThunderclapSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Thunderclap',
+            range: 5,
+            cooldown: 10000,
+            castTime: 1000,
+            channel: false,
+            manaCost: 30,
+            effect: (caster) => {
+                if (!caster.mesh) return;
+                const geometry = new THREE.CylinderGeometry(2, 2, 0.1);
+                const material = new THREE.MeshBasicMaterial({
+                    color: 0xffff00,
+                    transparent: true,
+                    opacity: 0.5
+                });
+                const thunder = new THREE.Mesh(geometry, material);
+                thunder.position.copy(caster.mesh.position);
+                thunder.userData.type = 'thunderclap';
+                spells.push(thunder);
+                window.scene.add(thunder);
+                setTimeout(() => {
+                    window.scene.remove(thunder);
+                    spells.splice(spells.indexOf(thunder), 1);
+                }, 3000);
+            }
+        });
+    }
+}
+
+// Hamstring: Slows target and deals damage
+export class HamstringSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Hamstring',
+            range: 5,
+            cooldown: 6000,
+            castTime: 0,
+            channel: false,
+            manaCost: 25,
+            effect: (caster) => {
+                if (!caster.mesh || !window.currentTarget) return;
+                const geometry = new THREE.SphereGeometry(1);
+                const material = new THREE.MeshBasicMaterial({
+                    color: 0xff0000,
+                    transparent: true,
+                    opacity: 0.3
+                });
+                const hamstring = new THREE.Mesh(geometry, material);
+                hamstring.position.copy(window.currentTarget.position);
+                window.scene.add(hamstring);
+                window.currentTarget.userData.slowUntil = Date.now() + 5000;
+                window.currentTarget.userData.slowAmount = 0.5;
+                setTimeout(() => {
+                    window.scene.remove(hamstring);
+                    window.currentTarget.userData.slowUntil = null;
+                    window.currentTarget.userData.slowAmount = 1;
+                }, 5000);
+            }
+        });
+    }
+}
+
+// Berserk: Increases attack power and speed
+export class BerserkSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Berserk',
+            range: 0,
+            cooldown: 15000,
+            castTime: 0,
+            channel: false,
+            manaCost: 40,
+            effect: (caster) => {
+                if (!caster.mesh) return;
+                caster.mesh.material.color.set(0xff0000);
+                setTimeout(() => {
+                    caster.mesh.material.color.set(0xe35050);
+                }, 10000);
+            }
+        });
+    }
+}
+
+// Heroic Strike: Deals significant damage
+export class HeroicStrikeSpell extends Spell {
+    constructor() {
+        super({
+            name: 'Heroic Strike',
+            range: 5,
+            cooldown: 5000,
+            castTime: 1000,
+            channel: false,
+            manaCost: 35,
+            effect: (caster) => {
+                if (!caster.mesh || !window.currentTarget) return;
+                const geometry = new THREE.BoxGeometry(1, 0.1, 1);
+                const material = new THREE.MeshBasicMaterial({
+                    color: 0xff0000,
+                    transparent: true,
+                    opacity: 0.5
+                });
+                const strike = new THREE.Mesh(geometry, material);
+                strike.position.copy(window.currentTarget.position);
+                strike.userData.type = 'heroicstrike';
+                spells.push(strike);
+                window.scene.add(strike);
+                setTimeout(() => {
+                    window.scene.remove(strike);
+                    spells.splice(spells.indexOf(strike), 1);
+                }, 1000);
+            }
+        });
+    }
+}
+
+// Update Hunter and Warrior classes to use the new spells
 export class Hunter extends Character {
     constructor(mesh = null) {
         super('Hunter', mesh);
+        this.spells.push(new DualAttackSpell());
+        this.spells.push(new SlowShotSpell());
+        this.spells.push(new PoisonShotSpell());
+        this.spells.push(new FeintDeathSpell());
+        this.spells.push(new IceTrapSpell());
+    }
+}
+
+export class Warrior extends Character {
+    constructor(mesh = null) {
+        super('Warrior', mesh);
+        this.spells.push(new ChargeSpell());
+        this.spells.push(new ThunderclapSpell());
+        this.spells.push(new HamstringSpell());
+        this.spells.push(new BerserkSpell());
+        this.spells.push(new HeroicStrikeSpell());
     }
 }
 
@@ -405,7 +805,7 @@ export function createUI() {
     // Spell Bar (under cast bar)
     const spellBarContainer = document.createElement('div');
     spellBarContainer.id = 'spellBarContainer';
-    spellBarContainer.style.position = 'absolute';
+    spellBarContainer.style.position = 'fixed';
     spellBarContainer.style.bottom = '40px';
     spellBarContainer.style.left = '50%';
     spellBarContainer.style.transform = 'translateX(-50%)';
@@ -414,46 +814,57 @@ export function createUI() {
     spellBarContainer.style.zIndex = '1000';
     document.body.appendChild(spellBarContainer);
 
-    if (window.magePlayer) {
-        window.magePlayer.spells.forEach((spell, index) => {
-            const spellDiv = document.createElement('div');
-            spellDiv.className = 'spellSquare';
-            spellDiv.id = `spellSquare-${index}`;
-            spellDiv.style.width = '50px';
-            spellDiv.style.height = '50px';
-            spellDiv.style.border = '2px solid #fff';
-            spellDiv.style.position = 'relative';
-            spellDiv.style.display = 'flex';
-            spellDiv.style.alignItems = 'center';
-            spellDiv.style.justifyContent = 'center';
-            spellDiv.style.backgroundColor = '#333';
+    // Create spell buttons for current player
+    if (window.currentPlayer && window.currentPlayer.spells) {
+        console.log('Creating spell buttons for player:', window.currentPlayer.type);
+        window.currentPlayer.spells.forEach((spell, index) => {
+            const button = document.createElement('button');
 
-            const label = document.createElement('div');
-            label.innerText = `${index + 1}: ${spell.name}`;
-            label.style.color = '#fff';
-            label.style.fontSize = '10px';
-            label.style.textAlign = 'center';
-            label.style.pointerEvents = 'none';
-            spellDiv.appendChild(label);
+            // Create spell container with name and key
+            const container = document.createElement('div');
+            container.style.display = 'flex';
+            container.style.flexDirection = 'column';
+            container.style.alignItems = 'center';
+            container.style.justifyContent = 'center';
+            container.style.width = '100%';
+            container.style.height = '100%';
 
-            const cooldownOverlay = document.createElement('div');
-            cooldownOverlay.className = 'cooldownOverlay';
-            cooldownOverlay.style.position = 'absolute';
-            cooldownOverlay.style.top = '0';
-            cooldownOverlay.style.left = '0';
-            cooldownOverlay.style.width = '100%';
-            cooldownOverlay.style.height = '100%';
-            cooldownOverlay.style.backgroundColor = 'rgba(0,0,0,0.6)';
-            cooldownOverlay.style.color = '#fff';
-            cooldownOverlay.style.fontSize = '12px';
-            cooldownOverlay.style.display = 'flex';
-            cooldownOverlay.style.alignItems = 'center';
-            cooldownOverlay.style.justifyContent = 'center';
-            cooldownOverlay.innerText = '';
-            spellDiv.appendChild(cooldownOverlay);
+            // Add key number
+            const keyNumber = document.createElement('div');
+            keyNumber.textContent = index + 1;
+            keyNumber.style.fontSize = '20px';
+            keyNumber.style.fontWeight = 'bold';
 
-            spellBarContainer.appendChild(spellDiv);
+            // Add spell name
+            const spellName = document.createElement('div');
+            spellName.textContent = spell.name;
+            spellName.style.fontSize = '10px';
+            spellName.style.marginTop = '2px';
+
+            container.appendChild(keyNumber);
+            container.appendChild(spellName);
+
+            button.appendChild(container);
+            button.style.width = '80px';
+            button.style.height = '60px';
+            button.style.border = '2px solid #fff';
+            button.style.backgroundColor = '#333';
+            button.style.color = 'white';
+            button.style.cursor = 'pointer';
+            button.style.padding = '5px';
+            button.style.display = 'flex';
+            button.style.alignItems = 'center';
+            button.style.justifyContent = 'center';
+            button.onclick = () => {
+                if (!button.disabled) {
+                    console.log('Casting spell:', spell.name);
+                    window.currentPlayer.castSpell(spell.name, Date.now());
+                }
+            };
+            spellBarContainer.appendChild(button);
         });
+    } else {
+        console.log('No current player or spells found');
     }
 }
 
@@ -479,20 +890,41 @@ export function updateCastBar(character, currentTime) {
     }
 }
 
-export function updateSpellBar(character, currentTime) {
-    character.spells.forEach((spell, index) => {
-        const spellDiv = document.getElementById(`spellSquare-${index}`);
-        if (spellDiv) {
-            const overlay = spellDiv.querySelector('.cooldownOverlay');
-            const timeSinceCast = currentTime - spell.lastCast;
-            if (timeSinceCast < spell.cooldown) {
-                const remaining = ((spell.cooldown - timeSinceCast) / 1000).toFixed(1);
-                overlay.innerText = remaining + 's';
-            } else {
-                overlay.innerText = '';
+export function updateSpellBar(player, currentTime) {
+    const container = document.getElementById('spellBarContainer');
+    if (!container) return;
+
+    const buttons = container.getElementsByTagName('button');
+    for (let i = 0; i < buttons.length; i++) {
+        const spell = player.spells[i];
+        if (!spell) continue;
+
+        const button = buttons[i];
+        const cooldown = spell.cooldown;
+        const lastCast = spell.lastCast || 0;
+        const timeSinceLastCast = currentTime - lastCast;
+
+        if (timeSinceLastCast < cooldown) {
+            button.disabled = true;
+            button.style.backgroundColor = '#666';
+
+            // Update only the key number with cooldown
+            const keyNumber = button.querySelector('div > div:first-child');
+            if (keyNumber) {
+                const remainingCooldown = Math.ceil((cooldown - timeSinceLastCast) / 1000);
+                keyNumber.textContent = remainingCooldown;
+            }
+        } else {
+            button.disabled = false;
+            button.style.backgroundColor = '#333';
+
+            // Reset the key number
+            const keyNumber = button.querySelector('div > div:first-child');
+            if (keyNumber) {
+                keyNumber.textContent = i + 1;
             }
         }
-    });
+    }
 }
 
 export function createTargetUI() {
